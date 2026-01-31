@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cervical Debug Tool v1.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        body {
+            background-color: #0a0a0a;
+            color: #00ff00;
+            font-family: 'JetBrains Mono', monospace;
+            overflow: hidden; /* Prevent scrolling */
+        }
+        .scanner-line {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00ff00, transparent);
+            position: absolute;
+            width: 100%;
+            top: 50%;
+            animation: scan 2s linear infinite;
+        }
+        @keyframes scan {
+            0% { top: 0%; }
+            100% { top: 100%; }
+        }
+        .glow { text-shadow: 0 0 10px #00ff00; }
+        .grid-overlay {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(to right, rgba(0,255,0,0.1) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(0,255,0,0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .crosshair {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border: 1px solid #00ff00;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+        }
+        #ear-crosshair { top: 30%; left: 50%; }
+        #shoulder-crosshair { top: 60%; left: 50%; }
+
+        .button-active {
+            background-color: #00ff00;
+            color: #0a0a0a;
+            border-color: #00ff00;
+        }
+        .button-inactive {
+            background-color: #1a1a1a;
+            color: #555555;
+            border-color: #333333;
+            cursor: not-allowed;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 50; /* Above video, below overlay */
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen p-4">
+
+    <header class="border-b border-green-900 pb-2 mb-4">
+        <div class="flex justify-between text-xs">
+            <span class="glow">LOGIC BY APPLIED BIOMECHANICS LAB</span>
+            <span id="timestamp" class="glow"></span>
+        </div>
+        <h1 class="text-xl font-bold mt-1 tracking-tighter">CERVICAL_DEBUG_v1.0</h1>
+    </header>
+
+    <main class="relative flex-grow bg-black border border-green-900 rounded-lg overflow-hidden flex items-center justify-center">
+        <video id="video" class="absolute inset-0 w-full h-full object-cover opacity-60" autoplay playsinline></video>
+        <canvas id="captureCanvas" class="hidden"></canvas> <div class="grid-overlay"></div>
+        <div class="scanner-line opacity-40"></div>
+        
+        <div id="ear-crosshair" class="crosshair"></div>
+        <div id="shoulder-crosshair" class="crosshair"></div>
+
+        <div id="setup-screen" class="absolute inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center p-6 text-center z-30">
+            <p class="mb-6 text-sm">系统就绪。请授权摄像头权限以进行生物力学扫描。</p>
+            <button id="init-btn" onclick="initCamera()" class="border border-green-500 px-6 py-2 button-active transition">初始化系统</button>
+        </div>
+
+        <div id="analysis-overlay" class="hidden absolute top-4 right-4 text-right z-30">
+            <div class="text-[10px] opacity-70">CURRENT_LOAD</div>
+            <div id="load-display" class="text-3xl font-bold glow">0.0kg</div>
+        </div>
+
+        <div id="action-overlay" class="hidden absolute inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center p-6 text-center z-40">
+            <div class="animate-pulse text-green-400 mb-2">SYSTEM_REPAIRING...</div>
+            <h2 id="action-title" class="text-lg font-bold mb-2"></h2>
+            <p id="action-desc" class="text-xs opacity-80 mb-4"></p>
+            <div id="timer" class="text-4xl font-bold mb-6"></div>
+            <div class="w-2/3 bg-green-900 h-2 mb-4 rounded-full">
+                <div id="progress" class="bg-green-500 h-full w-0 transition-all duration-1000 rounded-full"></div>
+            </div>
+            <p class="text-xs opacity-60">请严格按照指示进行动作...</p>
+        </div>
+
+        <div id="report-overlay" class="hidden absolute inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center p-6 text-center z-50">
+            <canvas id="reportCanvas" class="border border-green-500 mb-4"></canvas>
+            <p class="text-xs opacity-80 mb-4">长按图片保存你的身体 Debug 报告。</p>
+            <button onclick="window.location.reload()" class="border border-green-500 px-6 py-2 button-active transition">RUN_NEW_SCAN</button>
+        </div>
+
+    </main>
+
+    <footer class="mt-4 border-t border-green-900 pt-4">
+        <div class="grid grid-cols-2 gap-4">
+            <div class="text-[10px]">
+                <div class="flex justify-between"><span>CV_ANGLE:</span><span id="angle-val" class="glow">0°</span></div>
+                <div class="flex justify-between"><span>STATUS:</span><span id="status-val" class="glow">IDLE</span></div>
+            </div>
+            <button id="action-btn" onclick="captureAndAnalyze()" class="bg-green-900 text-green-100 text-xs py-2 rounded button-inactive">START_SCAN</button>
+        </div>
+    </footer>
+
+    <script>
+        const video = document.getElementById('video');
+        const captureCanvas = document.getElementById('captureCanvas');
+        const setupScreen = document.getElementById('setup-screen');
+        const analysisOverlay = document.getElementById('analysis-overlay');
+        const loadDisplay = document.getElementById('load-display');
+        const angleVal = document.getElementById('angle-val');
+        const statusVal = document.getElementById('status-val');
+        const actionBtn = document.getElementById('action-btn');
+        const actionOverlay = document.getElementById('action-overlay');
+        const reportOverlay = document.getElementById('report-overlay');
+        const reportCanvas = document.getElementById('reportCanvas');
+        const earCrosshair = document.getElementById('ear-crosshair');
+        const shoulderCrosshair = document.getElementById('shoulder-crosshair');
+        const initBtn = document.getElementById('init-btn');
+
+        let videoStream = null;
+        let initialAngle = 0;
+        let finalAngle = 0;
+        let isCameraReady = false;
+
+        // 模拟科研算法常数
+        const HEAD_WEIGHT = 5.0; // 头部基准重量 kg
+
+        // 动作序列
+        const ACTION_STEPS = [
+            { name: "寰枕关节卸载", desc: "后脑勺轻微向后发力，维持10秒", duration: 10, anim: "push" },
+            { name: "胸椎复位伸展", desc: "靠在椅背，双手抱头向后延展15秒", duration: 15, anim: "extend" },
+            { name: "神经滑动激活", desc: "侧头并下压对侧手掌，左右各10秒", duration: 10, anim: "glide" }
+        ];
+        let currentActionStep = 0;
+        let actionInterval;
+
+        // 更新时间戳
+        setInterval(() => {
+            document.getElementById('timestamp').innerText = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        }, 1000);
+
+        // 初始化摄像头
+        async function initCamera() {
+            try {
+                initBtn.classList.remove('button-active');
+                initBtn.classList.add('button-inactive');
+                initBtn.innerText = '正在初始化...';
+
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' },
+                    audio: false
+                });
+                video.srcObject = videoStream;
+                setupScreen.classList.add('hidden');
+                analysisOverlay.classList.remove('hidden');
+                statusVal.innerText = 'MONITORING';
+                isCameraReady = true;
+                actionBtn.classList.remove('button-inactive');
+                actionBtn.classList.add('button-active');
+                actionBtn.innerText = 'START_SCAN';
+
+                // Request DeviceOrientation permission for iOS
+                if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission()
+                        .then(permissionState => {
+                            if (permissionState === 'granted') {
+                                window.addEventListener('deviceorientation', handleOrientation);
+                            }
+                        })
+                        .catch(console.error);
+                } else {
+                    window.addEventListener('deviceorientation', handleOrientation);
+                }
+
+            } catch (err) {
+                alert("摄像头授权失败，请确保使用 HTTPS 环境，并点击允许。");
+                initBtn.classList.remove('button-inactive');
+                initBtn.classList.add('button-active');
+                initBtn.innerText = '初始化系统';
+            }
+        }
+
+        let alpha = 0, beta = 0, gamma = 0; // Device orientation angles
+        function handleOrientation(event) {
+            alpha = event.alpha; // Z轴，手机绕垂直轴旋转
+            beta = event.beta;   // X轴，手机前后倾斜
+            gamma = event.gamma; // Y轴，手机左右倾斜
+
+            // Simulate vertical alignment check
+            const isPhoneVertical = Math.abs(beta) < 5 && Math.abs(gamma) < 5; // Within 5 degrees of vertical
+            if (isCameraReady) {
+                if (isPhoneVertical) {
+                    actionBtn.classList.remove('button-inactive');
+                    actionBtn.classList.add('button-active');
+                    actionBtn.innerText = 'START_SCAN';
+                    statusVal.innerText = 'READY_TO_SCAN';
+                } else {
+                    actionBtn.classList.remove('button-active');
+                    actionBtn.classList.add('button-inactive');
+                    actionBtn.innerText = '调整手机垂直';
+                    statusVal.innerText = '调整手机垂直';
+                }
+            }
+        }
+
+
+        // 核心计算逻辑：模拟角度捕捉与压力转换
+        async function captureAndAnalyze() {
+            if (!isCameraReady || actionBtn.classList.contains('button-inactive')) return;
+
+            statusVal.innerText = 'CALCULATING...';
+            actionBtn.classList.remove('button-active');
+            actionBtn.classList.add('button-inactive');
+            actionBtn.innerText = '处理中...';
+
+            // Simulate capturing an image from video feed and processing
+            const context = captureCanvas.getContext('2d');
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+
+            // Here, you'd integrate a real pose estimation library (e.g., MediaPipe Pose)
+            // For MVP, we simulate angle based on typical forward head posture
+            initialAngle = (Math.random() * 25) + 10; // 模拟10-35度的前倾角
+            let calculatedLoad = (HEAD_WEIGHT + (initialAngle * 0.45)).toFixed(1);
+
+            setTimeout(() => {
+                angleVal.innerText = initialAngle.toFixed(1) + '°';
+                loadDisplay.innerText = calculatedLoad + 'kg';
+                
+                if (initialAngle > 15) { // 超过15度视为过载
+                    loadDisplay.style.color = '#ff8c00';
+                    statusVal.innerText = 'OVERLOAD_DETECTED';
+                    actionBtn.innerText = 'REPAIR_SYSTEM';
+                    actionBtn.classList.remove('button-inactive');
+                    actionBtn.classList.add('button-active');
+                    actionBtn.onclick = startRepairSequence;
+                } else {
+                    loadDisplay.style.color = '#00ff00';
+                    statusVal.innerText = 'OPTIMAL_PERFORMANCE';
+                    actionBtn.innerText = 'SCAN_AGAIN';
+                    actionBtn.classList.remove('button-inactive');
+                    actionBtn.classList.add('button-active');
+                    actionBtn.onclick = captureAndAnalyze; // 保持重新扫描
+                }
+            }, 1500); // Simulate processing time
+        }
+
+        // --- 动作引导模块 ---
+        async function startRepairSequence() {
+            analysisOverlay.classList.add('hidden');
+            setupScreen.classList.add('hidden'); // Hide setup in case it's shown
+            actionOverlay.classList.remove('hidden');
+            currentActionStep = 0;
+            executeNextAction();
+        }
+
+        function executeNextAction() {
+            if (currentActionStep < ACTION_STEPS.length) {
+                const action = ACTION_STEPS[currentActionStep];
+                document.getElementById('action-title').innerText = action.name;
+                document.getElementById('action-desc').innerText = action.desc;
+                document.getElementById('timer').innerText = action.duration + 's';
+                document.getElementById('progress').style.width = '0%';
+
+                let timeLeft = action.duration;
+                actionInterval = setInterval(() => {
+                    timeLeft--;
+                    document.getElementById('timer').innerText = timeLeft + 's';
+                    document.getElementById('progress').style.width =
+                        ((action.duration - timeLeft) / action.duration * 100) + '%';
+
+                    if (timeLeft <= 0) {
+                        clearInterval(actionInterval);
+                        currentActionStep++;
+                        executeNextAction(); // Execute next step
+                    }
+                }, 1000);
+            } else {
+                // All actions complete, proceed to final scan
+                clearInterval(actionInterval);
+                actionOverlay.classList.add('hidden');
+                analysisOverlay.classList.remove('hidden');
+                statusVal.innerText = 'REPAIR_COMPLETE. RESCANNING...';
+                
+                // Simulate final scan after repair
+                setTimeout(() => {
+                    finalAngle = (initialAngle - (Math.random() * 10) - 5).toFixed(1); // 模拟角度改善
+                    if (finalAngle < 5) finalAngle = (Math.random() * 3 + 3).toFixed(1); // 确保不会太低，且有一定随机性
+                    generateFinalReport();
+                }, 2000);
+            }
+        }
+
+        // --- 最终报告模块 ---
+        async function generateFinalReport() {
+            actionOverlay.classList.add('hidden');
+            analysisOverlay.classList.add('hidden');
+            reportOverlay.classList.remove('hidden');
+
+            const ctx = reportCanvas.getContext('2d');
+            reportCanvas.width = 720; // Standard social media width
+            reportCanvas.height = 1280; // Standard social media height
+
+            // Draw background
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, reportCanvas.width, reportCanvas.height);
+
+            // Draw header
+            ctx.font = 'bold 24px "JetBrains Mono"';
+            ctx.fillStyle = '#00ff00';
+            ctx.fillText('CERVICAL_DEBUG_REPORT', 40, 80);
+            ctx.font = '14px "JetBrains Mono"';
+            ctx.fillText(`LOGIC BY APPLIED BIOMECHANICS LAB`, 40, 110);
+            ctx.fillText(`TIMESTAMP: ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`, 40, 135);
+
+            // Draw data
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '16px "JetBrains Mono"';
+            ctx.fillText('Initial Angle: ', 40, 200);
+            ctx.fillStyle = '#ff8c00';
+            ctx.fillText(`${initialAngle}°`, 200, 200);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('Final Angle: ', 40, 240);
+            ctx.fillStyle = '#00ff00';
+            ctx.fillText(`${finalAngle}°`, 200, 240);
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('Pressure Delta: ', 40, 280);
+            ctx.fillStyle = '#00ff00';
+            const initialLoad = (HEAD_WEIGHT + (initialAngle * 0.45));
+            const finalLoad = (HEAD_WEIGHT + (finalAngle * 0.45));
+            const deltaLoad = (initialLoad - finalLoad).toFixed(1);
+            ctx.fillText(`-${deltaLoad}kg`, 200, 280);
+
+            // Draw simplified stick figure comparison
+            const drawStickFigure = (context, startX, angle, color) => {
+                const headRadius = 25;
+                const neckLength = 50;
+                const bodyLength = 100;
+
+                context.strokeStyle = color;
+                context.lineWidth = 3;
+                context.lineCap = 'round';
+
+                const shoulderY = 400; // Base Y position for shoulders
+
+                // Head (circle)
+                context.beginPath();
+                context.arc(startX, shoulderY - neckLength - headRadius - angle / 2, headRadius, 0, Math.PI * 2);
+                context.stroke();
+
+                // Neck (line, angled)
+                context.beginPath();
+                context.moveTo(startX, shoulderY); // Shoulder start
+                // Calculate neck end point based on angle (simplified)
+                const neckEndX = startX + neckLength * Math.sin(angle * Math.PI / 180 * 0.5); // Simplified angle effect
+                const neckEndY = shoulderY - neckLength * Math.cos(angle * Math.PI / 180 * 0.5);
+                context.lineTo(neckEndX, neckEndY);
+                context.stroke();
+
+                // Body (vertical line from shoulder)
+                context.beginPath();
+                context.moveTo(startX, shoulderY);
+                context.lineTo(startX, shoulderY + bodyLength);
+                context.stroke();
+            };
+
+            drawStickFigure(ctx, reportCanvas.width / 2 - 100, initialAngle, '#ff8c00'); // Before
+            drawStickFigure(ctx, reportCanvas.width / 2 + 100, finalAngle, '#00ff00');   // After
+
+            ctx.font = '12px "JetBrains Mono"';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('BEFORE', reportCanvas.width / 2 - 120, 550);
+            ctx.fillText('AFTER', reportCanvas.width / 2 + 80, 550);
+
+            // Performance Metrics
+            ctx.font = '16px "JetBrains Mono"';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('PERFORMANCE_METRICS:', 40, 650);
+            const drawMetric = (y, label, value, color) => {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(label, 60, y);
+                ctx.fillStyle = color;
+                ctx.fillText(value, 300, y);
+            };
+
+            drawMetric(690, 'STABILITY_SCORE:', '75%', '#00ff00');
+            drawMetric(720, 'FATIGUE_INDEX:', '20% (↓40%)', '#00ff00');
+            drawMetric(750, 'RECOVERY_TIME:', 'Optimal', '#00ff00');
+            
+            // Footer
+            ctx.font = '14px "JetBrains Mono"';
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText('身体是唯一的底层硬件，请按时 Debug。', 40, reportCanvas.height - 150);
+            ctx.font = '12px "JetBrains Mono"';
+            ctx.fillStyle = '#00ff00';
+            ctx.fillText('SCAN TO RUN SYSTEM CHECK', 40, reportCanvas.height - 100);
+            // Simulate QR Code area
+            ctx.strokeRect(reportCanvas.width - 150, reportCanvas.height - 150, 100, 100);
+            ctx.fillText('QR', reportCanvas.width - 110, reportCanvas.height - 95);
+
+
+        }
+    </script>
+</body>
+</html>
