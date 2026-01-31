@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cervical Debug Tool v1.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        body {
+            background-color: #0a0a0a;
+            color: #00ff00;
+            font-family: 'JetBrains Mono', monospace;
+            overflow: hidden;
+        }
+        .scanner-line {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00ff00, transparent);
+            position: absolute;
+            width: 100%;
+            top: 50%;
+            animation: scan 2s linear infinite;
+        }
+        @keyframes scan {
+            0% { top: 0%; }
+            100% { top: 100%; }
+        }
+        .glow { text-shadow: 0 0 10px #00ff00; }
+    </style>
+</head>
+<body class="flex flex-col h-screen p-4">
+
+    <header class="border-b border-green-900 pb-2 mb-4">
+        <div class="flex justify-between text-xs">
+            <span class="glow">LOGIC BY APPLIED BIOMECHANICS LAB</span>
+            <span id="timestamp"></span>
+        </div>
+        <h1 class="text-xl font-bold mt-1 tracking-tighter">CERVICAL_DEBUG_v1.0</h1>
+    </header>
+
+    <main class="relative flex-grow bg-black border border-green-900 rounded-lg overflow-hidden flex items-center justify-center">
+        <video id="video" class="absolute inset-0 w-full h-full object-cover opacity-60" autoplay playsinline></video>
+        
+        <div class="absolute inset-0 border-2 border-green-500 opacity-20 pointer-events-none"></div>
+        <div class="scanner-line opacity-40"></div>
+        
+        <div id="setup-screen" class="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center p-6 text-center">
+            <p class="mb-6 text-sm">系统就绪。请授权摄像头权限以进行生物力学扫描。</p>
+            <button onclick="initCamera()" class="border border-green-500 px-6 py-2 hover:bg-green-500 hover:text-black transition">初始化系统</button>
+        </div>
+
+        <div id="analysis-overlay" class="hidden absolute top-4 right-4 text-right">
+            <div class="text-[10px] opacity-70">CURRENT_LOAD</div>
+            <div id="load-display" class="text-3xl font-bold glow">0.0kg</div>
+        </div>
+    </main>
+
+    <footer class="mt-4 border-t border-green-900 pt-4">
+        <div class="grid grid-cols-2 gap-4">
+            <div class="text-[10px]">
+                <div class="flex justify-between"><span>CV_ANGLE:</span><span id="angle-val">0°</span></div>
+                <div class="flex justify-between"><span>STATUS:</span><span id="status-val">IDLE</span></div>
+            </div>
+            <button id="action-btn" onclick="captureAndAnalyze()" class="bg-green-900 text-green-100 text-xs py-2 rounded">START_SCAN</button>
+        </div>
+    </footer>
+
+    <script>
+        const video = document.getElementById('video');
+        const setupScreen = document.getElementById('setup-screen');
+        const loadDisplay = document.getElementById('load-display');
+        const angleVal = document.getElementById('angle-val');
+        const statusVal = document.getElementById('status-val');
+
+        // 模拟科研算法常数
+        const HEAD_WEIGHT = 5.0; // 头部基准重量 kg
+
+        // 更新时间戳
+        setInterval(() => {
+            document.getElementById('timestamp').innerText = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        }, 1000);
+
+        // 初始化摄像头
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' }, 
+                    audio: false 
+                });
+                video.srcObject = stream;
+                setupScreen.classList.add('hidden');
+                document.getElementById('analysis-overlay').classList.remove('hidden');
+                statusVal.innerText = 'MONITORING';
+            } catch (err) {
+                alert("摄像头授权失败，请确保使用 HTTPS 环境。");
+            }
+        }
+
+        // 核心计算逻辑：模拟角度捕捉与压力转换
+        function captureAndAnalyze() {
+            statusVal.innerText = 'CALCULATING...';
+            
+            // 此处在完整版中应由视觉算法(如MediaPipe)识别耳屏与肩峰
+            // MVP版采用随机模拟或基于重力传感器的角度输入
+            let mockAngle = Math.floor(Math.random() * 45); // 模拟捕捉到的前倾角
+            
+            // 物理公式：Load = 基准重量 / cos(theta) 或基于力矩公式的简化模拟
+            // 实际上头前倾每增加1寸，颈椎压力增加约4.5kg
+            let calculatedLoad = (HEAD_WEIGHT + (mockAngle * 0.45)).toFixed(1);
+
+            setTimeout(() => {
+                angleVal.innerText = mockAngle + '°';
+                loadDisplay.innerText = calculatedLoad + 'kg';
+                statusVal.innerText = mockAngle > 20 ? 'OVERLOAD' : 'OPTIMAL';
+                
+                if(mockAngle > 20) {
+                    loadDisplay.style.color = '#ff8c00';
+                    document.getElementById('action-btn').innerText = 'REPAIR_SYSTEM';
+                } else {
+                    loadDisplay.style.color = '#00ff00';
+                    document.getElementById('action-btn').innerText = 'SCAN_AGAIN';
+                }
+            }, 800);
+        }
+    </script>
+</body>
+</html>
