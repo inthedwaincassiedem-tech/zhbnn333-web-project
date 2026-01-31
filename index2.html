@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cervical Debug Pro - MediaPipe v2.0</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        body { background-color: #0a0a0a; color: #00ff00; font-family: 'JetBrains Mono', monospace; overflow: hidden; }
+        .glow { text-shadow: 0 0 10px #00ff00; }
+        #canvas-container { position: relative; width: 100%; height: 100%; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .status-bar { background: rgba(0, 255, 0, 0.1); border: 1px solid #00ff00; }
+        .loading-overlay { background: #0a0a0a; z-index: 100; position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    </style>
+</head>
+<body class="flex flex-col h-screen p-4">
+
+    <div id="loading" class="loading-overlay">
+        <div class="text-2xl font-bold mb-4 animate-pulse">INITIATING_AI_KERNEL...</div>
+        <div class="text-xs opacity-60">正在加载 MediaPipe Pose 模型 (约 5MB)</div>
+    </div>
+
+    <header class="border-b border-green-900 pb-2 mb-4">
+        <div class="flex justify-between text-[10px]">
+            <span class="glow">ENGINE: MEDIAPIPE_POSE_V1</span>
+            <span id="timestamp"></span>
+        </div>
+        <h1 class="text-xl font-bold mt-1 tracking-tighter">CERVICAL_DEBUG_PRO</h1>
+    </header>
+
+    <main class="relative flex-grow bg-black border border-green-900 rounded-lg overflow-hidden">
+        <div id="canvas-container">
+            <video id="input_video" class="hidden"></video>
+            <canvas id="output_canvas"></canvas>
+            
+            <div class="absolute top-4 left-4 z-10 space-y-1">
+                <div class="status-bar px-2 py-1 text-[10px]">
+                    ANGLE: <span id="realtime-angle" class="font-bold">--°</span>
+                </div>
+                <div class="status-bar px-2 py-1 text-[10px]">
+                    LOAD: <span id="realtime-load" class="font-bold">--kg</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="mt-4 border-t border-green-900 pt-4">
+        <div id="instruction" class="text-[10px] mb-4 h-8 text-center opacity-80">
+            请完全侧对摄像头，确保耳朵和肩膀清晰可见
+        </div>
+        <div class="flex gap-4">
+            <div class="flex-1 text-[10px] flex flex-col justify-center">
+                <div class="flex justify-between border-b border-green-900 pb-1">
+                    <span>SYSTEM_STATUS:</span>
+                    <span id="sys-status">STANDBY</span>
+                </div>
+                <div class="flex justify-between pt-1">
+                    <span>STABILITY:</span>
+                    <span id="stability-idx">0%</span>
+                </div>
+            </div>
+            <button id="capture-btn" class="flex-1 bg-green-900 text-green-100 text-xs py-3 rounded font-bold transition-all disabled:opacity-30" disabled>
+                LOCK_AND_FIX
+            </button>
+        </div>
+    </footer>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const loadingOverlay = document.getElementById('loading');
+        
+        const angleDisplay = document.getElementById('realtime-angle');
+        const loadDisplay = document.getElementById('realtime-load');
+        const sysStatus = document.getElementById('sys-status');
+        const captureBtn = document.getElementById('capture-btn');
+
+        let lastAngle = 0;
+        let isStable = false;
+
+        // 更新时间戳
+        setInterval(() => {
+            document.getElementById('timestamp').innerText = new Date().toISOString().slice(11, 19);
+        }, 1000);
+
+        // 核心：处理识别结果
+        function onResults(results) {
+            // 1. 绘制基础图像
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.poseLandmarks) {
+                // 关键点识别：7=左耳, 11=左肩 (侧位主选)
+                const ear = results.poseLandmarks[7];
+                const shoulder = results.poseLandmarks[11];
+
+                // 2. 检查可见度
+                if (ear.visibility > 0.6 && shoulder.visibility > 0.6) {
+                    loadingOverlay.classList.add('hidden');
+                    sysStatus.innerText = "TRACKING";
+                    
+                    // 3. 计算物理角度 (矢状面偏移)
+                    const dx = (shoulder.x - ear.x);
+                    const dy = (shoulder.y - ear.y);
+                    const radians = Math.atan2(dx, dy);
+                    const angle = Math.abs(radians * (180 / Math.PI)); // 绝对值校准
+                    
+                    // 4. 物理压力公式 (每增加1度，增加约0.45kg载荷)
+                    const currentLoad = (5 + (angle * 0.45)).toFixed(1);
+                    
+                    // 5. 更新 UI
+                    angleDisplay.innerText = `${angle.toFixed(1)}°`;
+                    loadDisplay.innerText = `${currentLoad}kg`;
+                    
+                    // 6. 绘制视觉反馈线
+                    drawGuide(ear, shoulder, canvasElement.width, canvasElement.height);
+
+                    // 7. 稳定性判定逻辑
+                    if (Math.abs(angle - lastAngle) < 0.5) {
+                        isStable = true;
+                        captureBtn.disabled = false;
+                        captureBtn.classList.remove('bg-green-900');
+                        captureBtn.classList.add('bg-green-500', 'text-black');
+                    } else {
+                        isStable = false;
+                        captureBtn.disabled = true;
+                    }
+                    lastAngle = angle;
+                } else {
+                    sysStatus.innerText = "ALIGNING...";
+                    captureBtn.disabled = true;
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        function drawGuide(ear, shoulder, width, height) {
+            const ex = ear.x * width;
+            const ey = ear.y * height;
+            const sx = shoulder.x * width;
+            const sy = shoulder.y * height;
+
+            // 绘制耳屏和肩峰连接线
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(ex, ey);
+            canvasCtx.lineTo(sx, sy);
+            canvasCtx.strokeStyle = "#00ff00";
+            canvasCtx.lineWidth = 2;
+            canvasCtx.setLineDash([5, 5]);
+            canvasCtx.stroke();
+
+            // 绘制垂直参考线
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(sx, sy);
+            canvasCtx.lineTo(sx, sy - 150);
+            canvasCtx.strokeStyle = "rgba(0, 255, 0, 0.5)";
+            canvasCtx.stroke();
+
+            // 绘制关键点圆圈
+            canvasCtx.fillStyle = "#00ff00";
+            canvasCtx.beginPath();
+            canvasCtx.arc(ex, ey, 6, 0, 2 * Math.PI);
+            canvasCtx.arc(sx, sy, 6, 0, 2 * Math.PI);
+            canvasCtx.fill();
+        }
+
+        // 初始化 MediaPipe Pose
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            enableSegmentation: false,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        pose.onResults(onResults);
+
+        // 启动相机
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await pose.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        camera.start();
+
+        // 窗口自适应
+        window.addEventListener('resize', () => {
+            canvasElement.width = canvasElement.clientWidth;
+            canvasElement.height = canvasElement.clientHeight;
+        });
+        canvasElement.width = canvasElement.clientWidth;
+        canvasElement.height = canvasElement.clientHeight;
+
+    </script>
+</body>
+</html>
